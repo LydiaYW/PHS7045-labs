@@ -270,6 +270,7 @@ close_weather_state <- weather_station_lat[!(USAF %in% med_weather_state$USAF)][
 ]
 
 library(leaflet)
+
 # combine the two sets of stations and make two group
 leaflet_station <- rbindlist(list(med_weather_state, close_weather_state), fill = TRUE) |>
   mutate(group = fifelse(USAF %in% med_weather_state$USAF, "median", "closest"))
