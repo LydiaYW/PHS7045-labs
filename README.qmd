@@ -169,8 +169,11 @@ myreg(mpg ~ wt, data = mtcars, outputname = mymodel)
     during the lecture to pre-process the stations’ data:
 
 ```{r}
-#| eval: false
 # Download the data
+library(data.table)
+library(dtplyr)
+library(dplyr)
+library(ggplot2)
 stations <- fread("ftp://ftp.ncdc.noaa.gov/pub/data/noaa/isd-history.csv")
 stations[, USAF := as.integer(USAF)]
 
@@ -180,7 +183,7 @@ stations[, CTRY   := fifelse(CTRY == "", NA_character_, CTRY)]
 stations[, STATE  := fifelse(STATE == "", NA_character_, STATE)]
 
 # Selecting the three relevant columns, and keeping unique records
-stations <- unique(stations[, list(USAF, CTRY, STATE)])
+stations <- unique(stations[CTRY=="US", list(USAF, CTRY, STATE, `STATION NAME`)])
 
 # Dropping NAs
 stations <- stations[!is.na(USAF)]
@@ -201,6 +204,21 @@ three coincide?
 
 Knit the document, commit your changes, and Save it on GitHub. Don’t
 forget to add `README.md` to the tree, the first time you render it.
+```{r}
+weather <- fread("https://raw.githubusercontent.com/USCbiostats/data-science-data/master/02_met/met_all.gz")
+weather[,USAF := fifelse(USAFID == 999999, NA_integer_, USAFID)]
+#stations[,table(table(USAF))]
+
+# Merge the data
+weather_station <- unique(weather[, .(USAF, temp, wind.sp, atm.press)]) |> merge(stations, by = "USAF", all.x = TRUE) 
+
+# median station in terms of temperature, wind speed, and atmospheric pressure
+med_weather <- weather_station[temp==quantile(temp, 0.5, na.rm = TRUE) & 
+                               wind.sp==quantile(wind.sp, 0.5, na.rm = TRUE) & 
+                               atm.press==quantile(atm.press, 0.5, na.rm = TRUE), .(USAF, CTRY, STATE, `STATION NAME`, temp, wind.sp, atm.press)]
+head(med_weather,3)
+```
+There are 31 stations that are the median in terms of temperature, wind speed, and atmospheric pressure. Above are the first 3 stations. There are multiple stations that are the median in terms of temperature, wind speed, and atmospheric pressure. So the three can be not coincide.
 
 ### Question 2: Representative station per state
 
@@ -210,6 +228,24 @@ distance. If multiple stations show in the median, select the one at the
 lowest latitude.
 
 Knit the doc and save it on GitHub.
+```{r}
+# median station per state with euclidean distance
+weather_station_lat <- unique(weather[, .(USAF, temp, wind.sp, atm.press, lat, lon)]) |> 
+  merge(stations, by = "USAF", all.x = TRUE)
+                              
+weather_station_lat[, med_temp := quantile(temp, 0.5, na.rm=T), by = STATE]
+weather_station_lat[, med_wind_sp := quantile(wind.sp, 0.5, na.rm=T), by = STATE]
+weather_station_lat[, med_atm.press := quantile(atm.press, 0.5, na.rm=T), by = STATE]
+weather_station_lat[, weather_distance := sqrt((temp - med_temp)^2 + (wind.sp - med_wind_sp)^2 + (atm.press - med_atm.press)^2)]
+#find the most representative station per state
+med_weather_state <- weather_station_lat[
+  order(STATE, weather_distance, lat),
+  .SD[1],
+  by = STATE
+]
+med_weather_state[, .(STATE, `STATION NAME`, temp, wind.sp, atm.press)]
+```
+Above are the most representative stations per state.
 
 ### (optional) Question 3: In the middle?
 
@@ -219,6 +255,36 @@ question, use `leaflet()` to visualize all ~100 points in the same
 figure, applying different colors for those identified in this question.
 
 Knit the doc and save it on GitHub.
+```{r}
+#identify the closest station to the mid-point
+weather_station_lat <- merge(weather_station_lat, 
+                             med_weather_state[, .(STATE,med_lat=lat,med_lon=lon)], by = c("STATE"), all.x = TRUE)
+
+weather_station_lat[, distance := sqrt((lat - med_lat)^2 + (lon - med_lon)^2), by = STATE]
+
+# find the closest station to the mid-point
+close_weather_state <- weather_station_lat[!(USAF %in% med_weather_state$USAF)][
+  order(STATE, distance),
+  .SD[2],
+  by = STATE
+]
+
+library(leaflet)
+# combine the two sets of stations and make two group
+leaflet_station <- rbindlist(list(med_weather_state, close_weather_state), fill = TRUE) |>
+  mutate(group = fifelse(USAF %in% med_weather_state$USAF, "median", "closest"))
+
+# plot the stations and color them by group
+pal <- colorFactor(
+  palette = c('lightblue', 'purple'),
+  domain = leaflet_station$group
+)
+
+leaflet_station |> leaflet() |> 
+  addProviderTiles("CartoDB.Positron") |> 
+  addCircleMarkers(lat = ~lat, lng = ~lon, color = ~pal(group), radius = 3)
+```
+
 
 ### (optional) Question 4: Means of means
 
@@ -249,6 +315,30 @@ you’d like, you can take this time to include the link of [the issue of
 the
 week](https://github.com/UofUEpiBio/PHS7045-advanced-programming/issues/5)
 so that you let us know when you are done, e.g.,
+
+```{r}
+# create summary table
+summary_weather <- weather_station_lat[, .(
+  Mean_temp = mean(temp, na.rm = TRUE),
+  Mean_wind.sp = mean(wind.sp, na.rm = TRUE),
+  Mean_atm.press = mean(atm.press, na.rm = TRUE),
+  N_entry = .N,
+  N_station = uniqueN(USAF)),
+  by = STATE] |>
+  mutate(temp_level = fifelse(Mean_temp < 20, "low", fifelse(Mean_temp < 25, "mid", "high")))
+
+# summary by temperature level
+summary_temp <- summary_weather[, .(
+  N_entry = sum(N_entry),
+  N_station = sum(N_station),
+  N_state = .N,
+  Mean_temp = mean(Mean_temp),
+  Mean_wind.sp = mean(Mean_wind.sp),
+  Mean_atm.press = mean(Mean_atm.press,na.rm = TRUE)),
+  by = temp_level]
+
+summary_temp
+```
 
 
 ```bash
